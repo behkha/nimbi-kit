@@ -73,6 +73,35 @@ extension View {
     }
 }
 
+/// Hosting view that tells its owner when the SwiftUI content wants a different size, so a
+/// borderless panel window can always match its content (and keep its top edge in place).
+public final class SizeReportingHostingView<Content: View>: NSHostingView<Content> {
+    public var onFittingSizeChange: (() -> Void)?
+    private var lastSize: NSSize = .zero
+
+    public required init(rootView: Content) { super.init(rootView: rootView) }
+
+    @available(*, unavailable)
+    public required init?(coder: NSCoder) { fatalError("not used") }
+
+    override public func layout() {
+        super.layout()
+        report()
+    }
+
+    override public func invalidateIntrinsicContentSize() {
+        super.invalidateIntrinsicContentSize()
+        DispatchQueue.main.async { [weak self] in self?.report() }
+    }
+
+    private func report() {
+        let size = fittingSize
+        guard abs(size.width - lastSize.width) > 0.5 || abs(size.height - lastSize.height) > 0.5 else { return }
+        lastSize = size
+        DispatchQueue.main.async { [weak self] in self?.onFittingSizeChange?() }
+    }
+}
+
 // MARK: - Keys and buttons
 
 /// Small rounded key hint shown next to the control it triggers ("esc", "J", "E").

@@ -40,12 +40,14 @@ Then `import NimbiKit` in the files that use it.
 ### Tokens
 
 - `Color(hex:)`: `"#RRGGBB"` in sRGB.
+- `ViewState`: `SwiftUI.State` under another name. `@State` is a macro whose plugin ships only with
+  full Xcode, so `@ViewState private var hover = false` builds with the Command Line Tools alone.
 - `Nimbi`: the tokens from DESIGN.md 15.1, extended with the rest of section 4.
   - `Nimbi.Surface` (`void`, `panel`, `panelBlack`, `window`, `sidebar`, `well`, `row`, …)
   - `Nimbi.Line` (`rim`, `row`, `card`, `pill`, `pillActive`)
   - `Nimbi.Text` (`primary`, `message`, `strong`, `dim`, `faint`, `ghost`)
   - `Nimbi.Aurora` (`sky`, `lavender`, `blush`, `glow`, `ink`, `gradient`)
-  - `Nimbi.State` (`working`, `waiting`, `done`, `destructive`, `asking`, `listening`, bubbles, …)
+  - `Nimbi.State` (`working`, `waiting`, `done`, `destructive`, `asking`, `listening`, `rain`, bubbles, …)
   - `Nimbi.Heat` (`core` … `coal`)
   - `Nimbi.Radius` (`keyHint` 5 … `card` 20)
   - `Nimbi.Motion` (`enter`, `bounce`, `panel`, `mood`, `gaze`, `leave`, `hover`, undo windows, …)
@@ -87,6 +89,8 @@ look.showTooltips = true
 - `PanelBackground(cornerRadius:)`: the solid panel (panel or panelBlack, with a rim). At the
   notch, with `.environment(\.hangsFromPill, true)`, it turns into the black flat-topped `IslandBody`.
 - `.floatingPanelShadow()`: the one panel shadow, with room so the window never clips it.
+- `SizeReportingHostingView`: an `NSHostingView` that calls `onFittingSizeChange` when the content
+  wants a new size, so a borderless panel can resize around it.
 - `KeyHint(key:onLight:)`
 - `PrimaryButtonStyle()`, `SecondaryButtonStyle()`,
   `PillButtonStyle(prominent:light:destructive:hint:)`

@@ -61,6 +61,8 @@ public enum Nimbi {
         public static let destructive = Color(hex: "#FF6961")
         public static let asking = Color(hex: "#FFD426")
         public static let listening = Color(hex: "#FF4F5E")
+        /// Rain amounts (chart and island bars): `sky` as one flat color, never the aurora gradient.
+        public static let rain = Color(hex: "#7FD0FF")
         public static let selectedFill = Color(hex: "#143A20")
         public static let selectedBorder = Color(hex: "#30D158").opacity(0.55)
         public static let promptBubble = Color(hex: "#13467E")
@@ -123,5 +125,6 @@ extension Color {
 }
 
 /// SwiftUI's `@State` is a macro in this SDK and its plugin only ships with full Xcode.
-/// Using the property wrapper through an alias builds with the Command Line Tools alone.
-typealias ViewState<Value> = SwiftUI.State<Value>
+/// Using the property wrapper through an alias builds with the Command Line Tools alone:
+/// write `@ViewState private var hover = false` instead of `@State`.
+public typealias ViewState<Value> = SwiftUI.State<Value>
