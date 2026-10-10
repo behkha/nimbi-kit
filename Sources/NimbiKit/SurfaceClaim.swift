@@ -105,6 +105,14 @@ public struct SurfaceClaim: Equatable {
         Self.owner(of: surface, in: defaults) == bundleID
     }
 
+    /// The one-click switch (DESIGN.md 18.2): the user picked this app for the surface, so it
+    /// becomes the owner whoever had it, and every nimbi app hears the claim and moves.
+    public func take(in defaults: UserDefaults = SurfaceClaim.defaults,
+                     center: DistributedNotificationCenter = .default()) {
+        Self.setOwner(bundleID, of: surface, in: defaults)
+        post(to: center)
+    }
+
     /// Takes the surface if nobody owns it yet (the first nimbi app wins by default), then posts
     /// the claim. Returns whether this app owns the surface afterwards.
     @discardableResult

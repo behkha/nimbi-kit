@@ -89,6 +89,8 @@ look.showTooltips = true
 - `PanelBackground(cornerRadius:)`: the solid panel (panel or panelBlack, with a rim). At the
   notch, with `.environment(\.hangsFromPill, true)`, it turns into the black flat-topped `IslandBody`.
 - `.floatingPanelShadow()`: the one panel shadow, with room so the window never clips it.
+- `IslandShape(bottomRadius:ear:)`: the notch island's outline, flat on top with concave ears.
+  `NSScreen.hasNotch`, `.notchSize`, `.notchMidX` and `NSScreen.islandScreen` measure where it goes.
 - `SizeReportingHostingView`: an `NSHostingView` that calls `onFittingSizeChange` when the content
   wants a new size, so a borderless panel can resize around it.
 - `KeyHint(key:onLight:)`
@@ -113,10 +115,10 @@ look.showTooltips = true
 let claim = SurfaceClaim(surface: .notch)            // this app's bundle ID
 let watching = SurfaceClaim.observe { other in ... } // every app's claims, on the main queue
 if claim.claim() { /* draw the island */ } else { /* fall back to the menu bar */ }
+claim.take()                                         // the user picked this app: owner, and tell everyone
 SurfaceClaim.owner(of: .edge)                        // bundle ID or nil
 SurfaceClaim.setOwner("app.nimbi.skyline", of: .notch)
 ```
 
 Claims travel as the distributed notification `app.nimbi.surface.claim`. Owners live in the
-`group.app.nimbi` defaults (standard defaults when the group can't be opened). It's API only so
-far: no app acts on it yet.
+`group.app.nimbi` defaults (standard defaults when the group can't be opened). Relay and Skyline act on the notch's owner.
