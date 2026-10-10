@@ -4,20 +4,20 @@ The shared code behind every nimbi app: the cloud, the design tokens and the sma
 chrome that make a nimbi app look like one. Relay was the first app; its cloud and UI moved here
 so the next ones import them instead of copying.
 
-The design itself lives in [`nimbi-site/DESIGN.md`](../nimbi-site/DESIGN.md). This package is
-its SwiftUI half: when the two disagree, DESIGN.md is the target.
+The design itself lives in [`DESIGN.md`](https://github.com/behkha/nimbi/blob/main/DESIGN.md) in the
+nimbi site repo. This package is its SwiftUI half: when the two disagree, DESIGN.md is the target.
 
 - Swift 5.9, macOS 13+, SwiftUI and AppKit.
 - Zero dependencies.
 
 ## Adding it
 
-For now, as a local package checked out next to the app:
+In a Swift package:
 
 ```swift
 // Package.swift
 dependencies: [
-    .package(path: "../nimbi-kit")
+    .package(url: "https://github.com/behkha/nimbi-kit.git", from: "0.1.0")
 ],
 targets: [
     .executableTarget(
@@ -27,11 +27,11 @@ targets: [
 ]
 ```
 
-Once it has a home on GitHub, swap the path for the URL and a version:
+In an Xcode project: File → Add Package Dependencies…, paste the URL above, and add the
+`NimbiKit` library to the app target.
 
-```swift
-.package(url: "https://github.com/behkha/nimbi-kit.git", from: "0.1.0")
-```
+To work on NimbiKit and an app at the same time, point the app at a local checkout instead:
+`.package(path: "../nimbi-kit")`.
 
 Then `import NimbiKit` in the files that use it.
 
