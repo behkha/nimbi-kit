@@ -65,6 +65,10 @@ NimbiCloud(size: 20, mood: mood, glance: 1, followsCursor: false, lively: false)
   Under Reduce Motion it changes mood but doesn't hop, shake or sway.
 - `Mood`: the eleven moods from DESIGN.md 3.3. Map your app's states onto them; don't add new ones
   here before they're in DESIGN.md.
+- `NimbiCloud(…, weather:)`: weather drawn around the cloud (DESIGN.md 3.5: the cloud stays the
+  cloud, props sit next to it). `CloudWeather`: `.clear` (a sun behind it), `.partlyCloudy`,
+  `.clearNight` (moon and stars), `.rain(0…1)`, `.thunder` (a bolt beside it), `.snow`, `.sleet`,
+  `.fog`, `.wind`, `.hot`. Drawn from 36 pt up, still under Reduce Motion, paused while hidden.
 - `CloudShape`: the outline on its own (icons, masks, glows).
 - `VisibilityProbe`: tells a view when its window is hidden or covered, to pause animation.
 

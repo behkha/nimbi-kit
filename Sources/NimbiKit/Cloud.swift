@@ -18,9 +18,12 @@ public struct NimbiCloud: View {
     /// Breathes and swirls all the time. When false it holds still (blinks aside) and only stirs
     /// for a moment when its mood changes: for a cloud that is always on screen.
     public var lively: Bool
+    /// Weather drawn around the cloud (a sun behind it, rain below it…). The cloud itself
+    /// doesn't change. Only drawn from 36 pt up; smaller, it would be noise.
+    public var weather: CloudWeather
 
     public init(size: CGFloat = 32, mood: Mood, working: Int = 0, glance: CGFloat = 0, blinks: Bool = true,
-                followsCursor: Bool = true, lively: Bool = true) {
+                followsCursor: Bool = true, lively: Bool = true, weather: CloudWeather = .none) {
         self.size = size
         self.mood = mood
         self.working = working
@@ -28,9 +31,21 @@ public struct NimbiCloud: View {
         self.blinks = blinks
         self.followsCursor = followsCursor
         self.lively = lively
+        self.weather = weather
     }
 
     public var body: some View {
+        if weather == .none || size < 36 {
+            cloud
+        } else {
+            cloud
+                .background(WeatherAround(weather: weather, size: size, behind: true))
+                .overlay(WeatherAround(weather: weather, size: size, behind: false))
+                .animation(.easeInOut(duration: 0.6), value: weather)
+        }
+    }
+
+    @ViewBuilder private var cloud: some View {
         if followsCursor {
             CursorGaze { gaze, near, play in
                 CloudFace(size: size, gaze: gaze, near: near, mood: feeling(play, near: near),
