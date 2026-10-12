@@ -33,6 +33,8 @@ public final class NotchOwnership: ObservableObject {
         if now != owner { owner = now }
     }
 
+    public var bundleID: String { claim.bundleID }
+
     public var ownedByMe: Bool { owner == claim.bundleID }
 
     /// The app this one would give the notch back to.
@@ -93,13 +95,22 @@ public final class IslandState: ObservableObject {
     /// The menu bar's height at the notch.
     @Published public internal(set) var height: CGFloat = 32
     @Published public internal(set) var attachedWidth: CGFloat = 318
+    /// Where the page is in a swipe (DESIGN.md 18.8's offset): 0 in place, −1 gone left, 1 waiting
+    /// on the right. Pages read it through `.islandDrift(_:)`.
+    @Published public internal(set) var drift: CGFloat = 0
+    /// The apps a swipe goes through (`NotchRing`), and this app's bundle ID among them.
+    @Published public internal(set) var ring: [String] = []
+    @Published public internal(set) var needsYou: Set<String> = []
+    public internal(set) var me = ""
 
     /// Just room for the cloud and the glance: the closed island sits over the menu bar and hides
     /// the items under it, so it's narrower than 18.7's 336 pt.
     public let wing: CGFloat
     public let openWidth: CGFloat
-    /// Below the notch, when open: 18.7's 150 pt band plus a little; one page needs no dots.
+    /// Below the notch, when open: 18.7's 150 pt band plus a little, without the page dots.
     public let openBand: CGFloat
+    /// Room for the page dots, 12 pt from the bottom, when there's more than one app to swipe to.
+    public static let dotsBand: CGFloat = 16
 
     public init(wing: CGFloat = 60, openWidth: CGFloat = 580, openBand: CGFloat = 160) {
         self.wing = wing
@@ -107,13 +118,18 @@ public final class IslandState: ObservableObject {
         self.openBand = openBand
     }
 
+    /// Page dots show once there's another app to swipe to.
+    public var showsDots: Bool { ring.count > 1 && ring.contains(me) }
+
     public var closedWidth: CGFloat { notchWidth > 0 ? notchWidth + 2 * wing : 2 * wing + 8 }
 
     /// The island's body (ears not included) in a mode.
     public func size(_ mode: Mode, textScale: Double) -> CGSize {
         switch mode {
         case .closed: return CGSize(width: closedWidth, height: height)
-        case .open: return CGSize(width: max(closedWidth, openWidth * textScale), height: height + openBand * textScale)
+        case .open:
+            return CGSize(width: max(closedWidth, openWidth * textScale),
+                          height: height + openBand * textScale + (showsDots ? Self.dotsBand : 0))
         case .attached: return CGSize(width: max(closedWidth, attachedWidth), height: height)
         }
     }
@@ -129,19 +145,39 @@ public final class IslandState: ObservableObject {
 }
 
 /// An app's own island at the notch, drawn only while the user has picked this app as the notch's
-/// owner, and gone the moment another nimbi app is picked. One page, so no dots and no swiping.
-/// Opens after 0.2 s of hover, closes 0.6 s after the pointer leaves (DESIGN.md 18.6); a click
-/// opens it at once and hands it the keyboard (`onKey`; esc closes).
+/// owner, and gone the moment another nimbi app is picked. Opens after 0.2 s of hover, closes
+/// 0.6 s after the pointer leaves (DESIGN.md 18.6); a click opens it at once and hands it the
+/// keyboard (`onKey`; esc closes, ← → change app).
+///
+/// Swiping (18.6): a two-finger swipe, a drag or ← → on the open island hands the notch to the
+/// next running nimbi app (`NotchRing`), whose island opens with its page drifting in. Every app
+/// keeps drawing its own island; the swipe only moves the notch between them.
 @MainActor
 public final class NotchIsland: NSObject {
     public let state: IslandState
     private let ownership: NotchOwnership
+    private let ring = NotchRing.shared
     private let window = IslandWindow()
     private var bag: Set<AnyCancellable> = []
     private var openTimer: Timer?
     private var closeTimer: Timer?
     private var keyMonitor: Any?
     private var moveMonitors: [Any] = []
+    private var scrollMonitor: Any?
+    private var arrivals: NSObjectProtocol?
+    private let foreign = ForeignSwipeWatcher()
+
+    /// A swipe in progress: horizontal travel so far, and when it last moved.
+    private var swipeTravel: CGFloat = 0
+    private var swipeLast = Date.distantPast
+    private var swipeLockedUntil = Date.distantPast
+    /// Set while this app hands the notch on, so its island lingers under the next one.
+    private var handingOff = false
+    /// The side the next owner's page should drift in from, when it arrives.
+    private var arrival: (direction: Int, keys: Bool, at: Date)?
+    private var hasKeys: Bool { keyMonitor != nil }
+    /// The last two drag samples (travel, time), for the release speed.
+    private var dragSamples: [(CGFloat, Date)] = []
 
     /// Called with true while the island is on show: the app's menu bar glyph steps aside meanwhile.
     public var onShown: ((Bool) -> Void)?
@@ -156,11 +192,37 @@ public final class NotchIsland: NSObject {
         self.ownership = ownership
         let state = state ?? IslandState()
         self.state = state
+        state.me = ownership.bundleID
         super.init()
-        let host = TrackingHostingView(rootView: IslandRoot(state: state, closed: closed, open: open))
+        var actions = IslandRootActions()
+        let host = TrackingHostingView(rootView: IslandRoot(state: state, closed: closed, open: open, actions: actions))
         host.onHover = { [weak self] inside in if inside { self?.hoverIn() } }
         host.onMouseDown = { [weak self] in self?.clicked() }
         window.contentView = host
+        actions.drag = { [weak self] dx, ended in self?.dragged(dx, ended: ended) }
+        actions.jump = { [weak self] target in self?.jump(to: target) }
+        host.rootView = IslandRoot(state: state, closed: closed, open: open, actions: actions)
+
+        ring.join(ownership.bundleID)
+        RingHotkeys.shared.register()
+        ring.$apps.combineLatest(ring.$needsYou).receive(on: RunLoop.main).sink { [weak self] apps, needs in
+            guard let self else { return }
+            let dotsBefore = self.state.showsDots
+            self.state.ring = apps
+            self.state.needsYou = needs
+            if dotsBefore != self.state.showsDots { self.place() }
+            self.watchForeign()
+        }.store(in: &bag)
+        arrivals = DistributedNotificationCenter.default().addObserver(forName: NotchRing.arrive, object: nil, queue: .main) { [weak self] note in
+            guard let info = note.userInfo, let target = info["bundleID"] as? String else { return }
+            let direction = info["direction"] as? Int ?? 1
+            let keys = (info["keys"] as? Int ?? 0) == 1
+            Task { @MainActor in
+                guard let self, target == self.ownership.bundleID else { return }
+                self.arrival = (direction, keys, Date())
+                if self.ownership.ownedByMe, self.isShown { self.arrive() }
+            }
+        }
 
         ownership.$owner.receive(on: RunLoop.main).sink { [weak self] _ in self?.update() }.store(in: &bag)
         NimbiAppearance.shared.$textScale.dropFirst().sink { [weak self] _ in
@@ -180,20 +242,168 @@ public final class NotchIsland: NSObject {
         return CGPoint(x: screen.notchMidX, y: screen.frame.maxY - state.height)
     }
 
+    /// Tells the other apps' islands whether this app needs you (their dot for it glows amber).
+    public func setNeedsYou(_ on: Bool) { ring.setNeedsYou(on, for: ownership.bundleID) }
+
     private func update() {
+        DispatchQueue.main.async { [weak self] in self?.watchForeign() }
         if ownership.ownedByMe, let screen = NSScreen.islandScreen {
             let (width, height) = screen.notchSize
             state.notchWidth = width
             state.height = height
-            place()
-            window.orderFrontRegardless()
+            handingOff = false
+            if let a = arrival, Date().timeIntervalSince(a.at) < 2 {
+                arrive()
+            } else {
+                place()
+                window.orderFrontRegardless()
+            }
             watchMoves(true)
             onShown?(true)
         } else {
-            setMode(.closed, animated: false)
-            window.orderOut(nil)
             watchMoves(false)
-            onShown?(false)
+            stopScroll()
+            stopKeys()
+            let hide = { [weak self] in
+                guard let self, !self.ownership.ownedByMe else { return }
+                self.state.mode = .closed
+                self.state.drift = 0
+                self.window.orderOut(nil)
+                self.onShown?(false)
+            }
+            // Handing on: stay a moment, so the next island opens over this one, not over a gap.
+            if handingOff {
+                handingOff = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { hide() }
+            } else {
+                hide()
+            }
+        }
+    }
+
+    /// Arrived by a swipe: open at once, the page drifting in from the side it came from.
+    private func arrive() {
+        guard let a = arrival else { return }
+        arrival = nil
+        openTimer?.invalidate()
+        state.drift = CGFloat(a.direction) * 0.85
+        state.mode = .open
+        place(for: .open)
+        window.orderFrontRegardless()
+        watchPointer()
+        startScroll()
+        if a.keys { window.makeKey(); startKeys() }
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        withAnimation(reduce ? .easeOut(duration: 0.15) : .spring(response: 0.45, dampingFraction: 0.8)) {
+            state.drift = 0
+        }
+    }
+
+    // MARK: Swiping
+
+    /// The next (+1) or previous (−1) app: the page drifts out, then the notch goes to that app.
+    /// At either end the page only stretches and springs back.
+    private func move(_ step: Int) {
+        ring.refresh()
+        guard let target = ring.neighbor(of: ownership.bundleID, step), target != ownership.bundleID else {
+            bounce(step)
+            return
+        }
+        let keys = hasKeys
+        withAnimation(.easeIn(duration: 0.16)) { state.drift = CGFloat(-step) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) { [weak self] in
+            guard let self else { return }
+            self.handingOff = true
+            NotchRing.handOff(to: target, direction: step, keys: keys)
+        }
+    }
+
+    private func jump(to target: String) {
+        guard let from = state.ring.firstIndex(of: ownership.bundleID), let to = state.ring.firstIndex(of: target),
+              from != to else { return }
+        let step = to > from ? 1 : -1
+        withAnimation(.easeIn(duration: 0.16)) { state.drift = CGFloat(-step) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) { [weak self] in
+            self?.handingOff = true
+            NotchRing.handOff(to: target, direction: step, keys: false)
+        }
+    }
+
+    private func bounce(_ step: Int) {
+        withAnimation(.spring(response: 0.18, dampingFraction: 0.9)) { state.drift = CGFloat(-step) * 0.12 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { self?.state.drift = 0 }
+        }
+    }
+
+    /// Mouse drags (18.6): the page follows the pointer, stretching at the ends; on release it
+    /// commits past 18% of the width or 0.45 pt/ms, or springs back.
+    private func dragged(_ dx: CGFloat, ended: Bool) {
+        guard state.mode == .open else { return }
+        let now = Date()
+        if !ended { dragSamples = Array((dragSamples + [(dx, now)]).suffix(2)) }
+        var velocity: CGFloat = 0
+        if ended, let first = dragSamples.first, let last = dragSamples.last, last.1 > first.1 {
+            // pt/ms over the last stretch, and nothing if the pointer stopped before letting go.
+            velocity = now.timeIntervalSince(last.1) < 0.08 ? (last.0 - first.0) / CGFloat(last.1.timeIntervalSince(first.1) * 1000) : 0
+        }
+        if ended { dragSamples = [] }
+        let width = state.size(.open, textScale: NimbiAppearance.shared.textScale).width
+        let step = dx < 0 ? 1 : -1
+        let free = ring.neighbor(of: ownership.bundleID, step) != nil
+        if !ended {
+            let o = dx / (0.55 * width)
+            state.drift = free ? o : o * 0.3
+            return
+        }
+        if free && (abs(dx) > 0.18 * width || abs(velocity) > 0.45) {
+            move(step)
+        } else {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { state.drift = 0 }
+        }
+    }
+
+    /// Two-finger swipes over the open island: past 46 pt, one app; then quiet for 220 ms first.
+    private func startScroll() {
+        guard scrollMonitor == nil else { return }
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self, event.window === self.window, self.state.mode == .open, event.hasPreciseScrollingDeltas
+            else { return event }
+            let now = Date()
+            if now.timeIntervalSince(self.swipeLast) > 0.22 { self.swipeTravel = 0 }
+            self.swipeLast = now
+            guard now >= self.swipeLockedUntil, abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else { return event }
+            self.swipeTravel += Swipe.fingerDX(event)
+            if abs(self.swipeTravel) > Swipe.threshold {
+                let step = self.swipeTravel < 0 ? 1 : -1
+                self.swipeTravel = 0
+                self.swipeLockedUntil = now.addingTimeInterval(0.22)
+                self.move(step)
+            } else if event.phase == .ended || event.momentumPhase == .began {
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { self.state.drift = 0 }
+            } else {
+                // A little give while the fingers move, so the page feels attached to them.
+                let width = self.state.size(.open, textScale: NimbiAppearance.shared.textScale).width
+                self.state.drift = self.swipeTravel / (0.55 * width) * 0.6
+            }
+            return nil
+        }
+    }
+
+    private func stopScroll() {
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+        scrollMonitor = nil
+        swipeTravel = 0
+    }
+
+    /// While an app that draws its own notch (Relay) has it, the leading island app watches for
+    /// swipes over it, so Relay's island takes part without changing.
+    private func watchForeign() {
+        let owner = ownership.owner
+        if ring.drawsItsOwn(owner), let owner, ring.isLeader(ownership.bundleID), ring.apps.count > 1 {
+            if !foreign.isOn { foreign.start(from: owner) }
+        } else if foreign.isOn {
+            foreign.stop()
         }
     }
 
@@ -253,7 +463,7 @@ public final class NotchIsland: NSObject {
             Task { @MainActor in
                 guard let self else { timer.invalidate(); return }
                 guard self.state.mode == .open else { timer.invalidate(); self.closeTimer = nil; return }
-                if self.pointerInside { awaySince = nil; return }
+                if self.pointerInside || self.hasKeys { awaySince = nil; return }
                 let since = awaySince ?? Date()
                 awaySince = since
                 if Date().timeIntervalSince(since) >= 0.6 {
@@ -282,8 +492,9 @@ public final class NotchIsland: NSObject {
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         withAnimation(animated ? (reduce ? .easeOut(duration: 0.15) : (growing ? Nimbi.Motion.islandOpen : Nimbi.Motion.islandClose)) : nil) {
             state.mode = mode
+            state.drift = 0
         }
-        if mode == .open { watchPointer() } else { stopKeys() }
+        if mode == .open { watchPointer(); startScroll() } else { stopKeys(); stopScroll() }
         if !growing {
             DispatchQueue.main.asyncAfter(deadline: .now() + (animated ? 0.45 : 0)) { [weak self] in
                 guard let self, self.state.mode == mode else { return }
@@ -312,8 +523,12 @@ public final class NotchIsland: NSObject {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.window === self.window else { return event }
             guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
-            if event.keyCode == 53 { self.setMode(.closed); return nil }   // esc
-            return self.onKey?(event.keyCode) == true ? nil : event
+            switch event.keyCode {
+            case 53: self.setMode(.closed); return nil      // esc
+            case 123: self.move(-1); return nil              // ←
+            case 124: self.move(1); return nil               // →
+            default: return self.onKey?(event.keyCode) == true ? nil : event
+            }
         }
     }
 
@@ -373,23 +588,47 @@ public final class TrackingHostingView<Content: View>: NSHostingView<Content> {
     override public func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+struct IslandRootActions {
+    /// Drag travel (pt), and whether it ended.
+    var drag: (CGFloat, Bool) -> Void = { _, _ in }
+    /// A page dot: the notch to that app.
+    var jump: (String) -> Void = { _ in }
+}
+
 /// The black island, growing and shrinking with its mode, with the app's content in it.
 private struct IslandRoot<Closed: View, Open: View>: View {
     @ObservedObject var state: IslandState
     var closed: (IslandState) -> Closed
     var open: (IslandState) -> Open
+    var actions: IslandRootActions
     @ObservedObject private var look = NimbiAppearance.shared
 
     var body: some View {
         let size = state.size(state.mode, textScale: look.textScale)
+        let o = state.drift
         ZStack(alignment: .top) {
             IslandShape(bottomRadius: state.bottomRadius)
                 .fill(Color.black)
             if state.mode == .open {
+                // Drift (DESIGN.md 18.8): the page slides and fades; its cloud and text add their own.
                 open(state)
                     .padding(.top, state.height)
+                    .padding(.bottom, state.showsDots ? IslandState.dotsBand : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .offset(x: o * 0.55 * size.width)
+                    .opacity(Double(max(0, 1 - 1.15 * abs(o))))
+                    .environment(\.islandDrift, IslandDrift(offset: o, width: size.width))
+                    .contentShape(Rectangle())
+                    .gesture(DragGesture(minimumDistance: 6, coordinateSpace: .global)
+                        .onChanged { actions.drag($0.translation.width, false) }
+                        .onEnded { actions.drag($0.translation.width, true) })
                     .transition(.opacity.animation(.easeOut(duration: 0.18).delay(0.08)))
+                if state.showsDots {
+                    PageDots(state: state, jump: actions.jump)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 12)
+                        .transition(.opacity)
+                }
             } else {
                 closed(state)
                     .frame(height: state.height)
@@ -405,7 +644,100 @@ private struct IslandRoot<Closed: View, Open: View>: View {
     }
 }
 
-/// The closed island's two wings around the notch: the cloud on the left, the glance on the right.
+/// One dot per app (18.7): the current one a 16 × 6 white capsule, the others 6 pt at white
+/// 0.28, and one that needs you amber, glowing and pulsing. Each is a tab with the app's name.
+private struct PageDots: View {
+    @ObservedObject var state: IslandState
+    var jump: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(state.ring, id: \.self) { app in
+                let current = app == state.me
+                let urgent = !current && state.needsYou.contains(app)
+                Button { jump(app) } label: {
+                    Capsule()
+                        .fill(current ? Color.white : urgent ? Nimbi.State.asking : Color.white.opacity(0.28))
+                        .frame(width: current ? 16 : 6, height: 6)
+                        .shadow(color: urgent ? Nimbi.State.asking.opacity(0.8) : .clear, radius: 4)
+                        .modifier(Pulse(on: urgent))
+                        .padding(4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help(NotchOwnership.appName(app))
+                .accessibilityLabel(NotchOwnership.appName(app) + (urgent ? ", needs you" : ""))
+                .accessibilityAddTraits(current ? [.isSelected] : [])
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.ring)
+    }
+}
+
+private struct Pulse: ViewModifier {
+    var on: Bool
+    @ViewState private var big = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(on && big ? 1.35 : 1)
+            .onAppear { animate() }
+            .onChange(of: on) { _ in animate() }
+    }
+
+    private func animate() {
+        guard on else { big = false; return }
+        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { big = true }
+    }
+}
+
+/// Where a page is in a swipe, for its layers.
+public struct IslandDrift: Equatable {
+    public var offset: CGFloat
+    public var width: CGFloat
+}
+
+private struct IslandDriftKey: EnvironmentKey {
+    static let defaultValue = IslandDrift(offset: 0, width: 580)
+}
+
+extension EnvironmentValues {
+    public var islandDrift: IslandDrift {
+        get { self[IslandDriftKey.self] }
+        set { self[IslandDriftKey.self] = newValue }
+    }
+}
+
+/// The layers of a page in a swipe (DESIGN.md 18.8): the cloud moves furthest, lifts and
+/// shrinks a little; the text moves a little more than the page.
+public enum IslandDriftLayer { case cloud, text }
+
+private struct DriftLayer: ViewModifier {
+    var layer: IslandDriftLayer
+    @Environment(\.islandDrift) private var drift
+
+    func body(content: Content) -> some View {
+        let o = drift.offset, a = abs(o)
+        switch layer {
+        case .cloud:
+            content
+                .scaleEffect(1 - 0.18 * a)
+                .offset(x: o * 0.5 * drift.width, y: -10 * a)
+        case .text:
+            content.offset(x: o * 0.15 * drift.width)
+        }
+    }
+}
+
+extension View {
+    /// Moves this part of an island page with the swipe: `.cloud` for the page's cloud, `.text`
+    /// for its words.
+    public func islandDrift(_ layer: IslandDriftLayer) -> some View { modifier(DriftLayer(layer: layer)) }
+}
+
+/// The closed island's two wings around the notch: the cloud on the left, the glance on the
+/// right, with 4 pt dots under the glance when there are other apps to swipe to.
 public struct IslandWings<Left: View, Right: View>: View {
     @ObservedObject var state: IslandState
     var left: Left
@@ -421,7 +753,21 @@ public struct IslandWings<Left: View, Right: View>: View {
         HStack(spacing: 0) {
             left.frame(width: state.wing, alignment: .center)
             Spacer(minLength: state.notchWidth)
-            right.frame(width: state.wing, alignment: .center)
+            VStack(spacing: 2) {
+                right
+                if state.showsDots {
+                    HStack(spacing: 3) {
+                        ForEach(state.ring, id: \.self) { app in
+                            Circle()
+                                .fill(app == state.me ? Color.white
+                                      : state.needsYou.contains(app) ? Nimbi.State.asking : Color.white.opacity(0.3))
+                                .frame(width: 4, height: 4)
+                        }
+                    }
+                    .accessibilityHidden(true)
+                }
+            }
+            .frame(width: state.wing, alignment: .center)
         }
     }
 }

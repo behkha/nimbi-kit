@@ -17,7 +17,7 @@ In a Swift package:
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/behkha/nimbi-kit.git", from: "0.6.0")
+    .package(url: "https://github.com/behkha/nimbi-kit.git", from: "0.7.0")
 ],
 targets: [
     .executableTarget(
@@ -149,3 +149,18 @@ island.attach(width:) / island.detach() / island.hangPoint   // a panel hanging 
 
 It shows only while the user has picked this app as the notch's owner, opens after 0.2 s of hover,
 closes 0.6 s after the pointer leaves, and opens at once on a click (DESIGN.md 18.6).
+
+### Swiping between apps
+
+Every app keeps its own island; a swipe moves the notch to the next running nimbi app (DESIGN.md
+18.2a). `NotchIsland` does it on its own: a two-finger swipe, a drag or ← → on the open island hands
+the notch on, the next app's island opens with its page drifting in, and page dots show the ring.
+`NotchRing.shared` keeps the ring (running apps that can be at the notch, in install order; Relay
+first while its pill is at the notch), answers ⌃⌥← / ⌃⌥→ from anywhere, and watches for swipes over
+Relay's own island while Relay has the notch.
+
+```swift
+NimbiCloud(size: 92, mood: mood).islandDrift(.cloud)   // the page's cloud drifts furthest
+VStack { /* title, subtitle, actions */ }.islandDrift(.text)
+island.setNeedsYou(urgency == .needsYou)              // this app's dot glows amber elsewhere
+```
