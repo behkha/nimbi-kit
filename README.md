@@ -17,7 +17,7 @@ In a Swift package:
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/behkha/nimbi-kit.git", from: "0.5.0")
+    .package(url: "https://github.com/behkha/nimbi-kit.git", from: "0.6.0")
 ],
 targets: [
     .executableTarget(
@@ -133,3 +133,19 @@ SurfaceClaim.setOwner("app.nimbi.skyline", of: .notch)
 
 Claims travel as the distributed notification `app.nimbi.surface.claim`. Owners live in the
 `group.app.nimbi` defaults (standard defaults when the group can't be opened). Relay and Skyline act on the notch's owner.
+
+For an app with its own island (phase 1, until the shared island exists), `NotchOwnership` and
+`NotchIsland` do the rest:
+
+```swift
+let notch = NotchOwnership(appName: "Tempo")          // owner, line, take(), giveBack(), giveBackTitle
+let island = NotchIsland(ownership: notch, closed: { state in
+    IslandWings(state: state) { NimbiCloud(size: 24, mood: mood) } right: { Text("18′") }
+}, open: { state in MyPage() })
+island.onShown = { shown in statusItem.isVisible = !shown }  // one glyph at a time
+island.onKey = { keyCode in false }                          // keys while it has the keyboard; esc closes
+island.attach(width:) / island.detach() / island.hangPoint   // a panel hanging from it
+```
+
+It shows only while the user has picked this app as the notch's owner, opens after 0.2 s of hover,
+closes 0.6 s after the pointer leaves, and opens at once on a click (DESIGN.md 18.6).
