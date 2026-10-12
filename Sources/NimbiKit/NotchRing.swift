@@ -27,6 +27,8 @@ public final class NotchRing: ObservableObject {
 
     private var observers: [NSObjectProtocol] = []
     private var claims: SurfaceClaim.Observation?
+    /// When each app was last swiped to.
+    private var arrivals: [String: Date] = [:]
 
     private init() {
         let center = NSWorkspace.shared.notificationCenter
@@ -37,6 +39,10 @@ public final class NotchRing: ObservableObject {
         }
         observers.append(DistributedNotificationCenter.default().addObserver(forName: Self.status, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
+        })
+        observers.append(DistributedNotificationCenter.default().addObserver(forName: Self.arrive, object: nil, queue: .main) { [weak self] note in
+            guard let target = note.userInfo?["bundleID"] as? String else { return }
+            Task { @MainActor in self?.arrivals[target] = Date() }
         })
         // Relay's dock setting can change while it runs; a claim follows each change.
         claims = SurfaceClaim.observe { [weak self] _ in Task { @MainActor in self?.refresh() } }
@@ -81,6 +87,11 @@ public final class NotchRing: ObservableObject {
         guard let bundleID, let i = apps.firstIndex(of: bundleID) else { return apps.first }
         let j = i + step
         return apps.indices.contains(j) ? apps[j] : nil
+    }
+
+    /// Whether `bundleID` was just swiped to (its island opens on arrival).
+    public func arrivedRecently(_ bundleID: String) -> Bool {
+        arrivals[bundleID].map { Date().timeIntervalSince($0) < 2 } ?? false
     }
 
     /// Apps that draw their own notch without NimbiKit's island (Relay): another app watches
@@ -182,6 +193,11 @@ final class ForeignSwipeWatcher {
         if let m = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged], handler: { [weak self] _ in
             Task { @MainActor in self?.moved() }
         }) { monitors.append(m) }
+        // Just swiped to Relay: its dashboard opens under the pointer, so the next swipe counts.
+        if NotchRing.shared.arrivedRecently(owner), let screen = NSScreen.islandScreen,
+           Self.open(screen).contains(NSEvent.mouseLocation) {
+            armed = true
+        }
         moved()
     }
 
