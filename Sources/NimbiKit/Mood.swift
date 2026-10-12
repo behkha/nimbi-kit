@@ -1,6 +1,6 @@
 /// How the cloud feels. Every app maps its own states onto these (DESIGN.md 3.3); the last two
 /// come from the cursor playing with it.
-public enum Mood: Equatable {
+public enum Mood: Equatable, Sendable {
     /// Nothing to do.
     case asleep
     /// Ready, nothing asked.

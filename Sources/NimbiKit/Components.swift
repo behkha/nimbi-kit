@@ -531,3 +531,60 @@ public struct HoverHalo<S: Shape>: ViewModifier {
             .pointerHover { h in withAnimation(.easeOut(duration: 0.16)) { hover = h } }
     }
 }
+
+// MARK: - Undo bar
+
+/// DESIGN.md 8: "✓ Session reset · esc to undo", with a 2.5 pt blue line draining over the undo
+/// window (`Nimbi.Motion.undoWindow`, or `undoWindowDestructive`). The app keeps the pending
+/// action and runs it when the window ends; this only draws it.
+public struct UndoBar: View {
+    public var label: String
+    public var systemImage: String
+    public var tint: Color
+    public var started: Date
+    public var duration: TimeInterval
+    public var onUndo: () -> Void
+    @ObservedObject private var look = NimbiAppearance.shared
+
+    public init(label: String, systemImage: String = "checkmark.circle.fill", tint: Color = Nimbi.State.done,
+                started: Date, duration: TimeInterval = Nimbi.Motion.undoWindow, onUndo: @escaping () -> Void) {
+        self.label = label
+        self.systemImage = systemImage
+        self.tint = tint
+        self.started = started
+        self.duration = duration
+        self.onUndo = onUndo
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage).font(look.font(14)).foregroundStyle(tint)
+                Text(label).font(look.font(12.5, .medium)).foregroundStyle(Nimbi.Text.primary).lineLimit(1)
+                Spacer(minLength: 6)
+                Button(action: onUndo) {
+                    HStack(spacing: 5) {
+                        KeyHint(key: "esc")
+                        Text("to undo").font(look.font(11, .medium)).foregroundStyle(Color.white.opacity(0.85))
+                    }
+                    .padding(.leading, 3).padding(.trailing, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .accessibilityLabel("Undo")
+            }
+            .padding(.horizontal, 11).padding(.top, 9).padding(.bottom, 7)
+            TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
+                let f = max(0, 1 - ctx.date.timeIntervalSince(started) / duration)
+                GeometryReader { geo in
+                    Capsule().fill(Nimbi.State.working).frame(width: geo.size.width * f, height: 2.5)
+                }
+                .frame(height: 2.5)
+            }
+            .padding(.horizontal, 9)
+            .padding(.bottom, 3)
+        }
+        .background(RoundedRectangle(cornerRadius: Nimbi.Radius.well, style: .continuous).fill(Nimbi.Surface.well))
+    }
+}

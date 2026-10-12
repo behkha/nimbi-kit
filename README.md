@@ -17,7 +17,7 @@ In a Swift package:
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/behkha/nimbi-kit.git", from: "0.1.0")
+    .package(url: "https://github.com/behkha/nimbi-kit.git", from: "0.5.0")
 ],
 targets: [
     .executableTarget(
@@ -69,6 +69,11 @@ NimbiCloud(size: 20, mood: mood, glance: 1, followsCursor: false, lively: false)
   cloud, props sit next to it). `CloudWeather`: `.clear` (a sun behind it), `.partlyCloudy`,
   `.clearNight` (moon and stars), `.rain(0…1)`, `.thunder` (a bolt beside it), `.snow`, `.sleet`,
   `.fog`, `.wind`, `.hot`. Drawn from 36 pt up, still under Reduce Motion, paused while hidden.
+- `NimbiCloud(…, form:, progress:)`: the shape it takes (DESIGN.md 3.5, Tempo only). `CloudForm`:
+  `.cloud`, `.hourglass` (its sand runs down with `progress`, 0…1), `.bell` (swings, ringing),
+  `.mug` (steaming), `.moon`. Skin, face, eyes and moods stay; the outline springs from one form to
+  the next point by point, overshooting a little for a squash and stretch.
+- `FormShape(form)`: a form's outline on its own, animatable (`Outline` is its `VectorArithmetic`).
 - `CloudShape`: the outline on its own (icons, masks, glows).
 - `VisibilityProbe`: tells a view when its window is hidden or covered, to pause animation.
 
@@ -98,6 +103,8 @@ look.showTooltips = true
 - `SizeReportingHostingView`: an `NSHostingView` that calls `onFittingSizeChange` when the content
   wants a new size, so a borderless panel can resize around it.
 - `KeyHint(key:onLight:)`
+- `UndoBar(label:systemImage:tint:started:duration:onUndo:)`: "Timer reset · esc to undo" with the
+  draining blue line (DESIGN.md 8). The app keeps the pending action; this only draws it.
 - `PrimaryButtonStyle()`, `SecondaryButtonStyle()`,
   `PillButtonStyle(prominent:light:destructive:hint:)`
 - `StatusGlyph(_:working:color:hot:size:pop:)`: working arc, colored dot or ember; pops when

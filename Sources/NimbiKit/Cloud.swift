@@ -21,9 +21,14 @@ public struct NimbiCloud: View {
     /// Weather drawn around the cloud (a sun behind it, rain below it…). The cloud itself
     /// doesn't change. Only drawn from 36 pt up; smaller, it would be noise.
     public var weather: CloudWeather
+    /// The shape it takes (DESIGN.md 3.5): the cloud, or Tempo's tools. Springs between them.
+    public var form: CloudForm
+    /// How far through the form's job (0…1): the hourglass's sand runs down with it.
+    public var progress: Double
 
     public init(size: CGFloat = 32, mood: Mood, working: Int = 0, glance: CGFloat = 0, blinks: Bool = true,
-                followsCursor: Bool = true, lively: Bool = true, weather: CloudWeather = .none) {
+                followsCursor: Bool = true, lively: Bool = true, weather: CloudWeather = .none,
+                form: CloudForm = .cloud, progress: Double = 0) {
         self.size = size
         self.mood = mood
         self.working = working
@@ -32,6 +37,8 @@ public struct NimbiCloud: View {
         self.followsCursor = followsCursor
         self.lively = lively
         self.weather = weather
+        self.form = form
+        self.progress = progress
     }
 
     public var body: some View {
@@ -49,11 +56,11 @@ public struct NimbiCloud: View {
         if followsCursor {
             CursorGaze { gaze, near, play in
                 CloudFace(size: size, gaze: gaze, near: near, mood: feeling(play, near: near),
-                          working: working, blinks: blinks, lively: lively)
+                          working: working, blinks: blinks, lively: lively, form: form, progress: progress)
             }
         } else {
             CloudFace(size: size, gaze: CGPoint(x: glance, y: 0), near: 0, mood: mood,
-                      working: working, blinks: blinks, lively: lively)
+                      working: working, blinks: blinks, lively: lively, form: form, progress: progress)
         }
     }
 
@@ -226,6 +233,8 @@ private struct CloudFace: View {
     var working: Int
     var blinks: Bool
     var lively = true
+    var form: CloudForm = .cloud
+    var progress: Double = 0
     @ViewState private var blink = false
     /// Its window is hidden or covered: no point drawing frames nobody sees.
     @ViewState private var hidden = false
@@ -242,19 +251,24 @@ private struct CloudFace: View {
         let e = self.e
         ZStack {
             skin(e)
+            FormExtras(form: form, size: size, progress: progress, paused: hidden || reduceMotion)
+                .animation(.easeInOut(duration: 0.9), value: progress)
             face(e)
         }
         .frame(width: size, height: size)
         // The ring and the extras spill past the cloud without taking up room.
-        .background(FluidRing(size: size, e: e, gaze: gaze, paused: paused))
+        .background(FluidRing(size: size, e: e, gaze: gaze, paused: paused, form: form))
         .overlay(Marks(size: size, marks: e.marks, paused: paused))
-        .modifier(Wiggle(size: size, e: e, paused: paused, still: reduceMotion))
+        .modifier(Wiggle(size: size, e: e, paused: paused, still: reduceMotion, ringing: form == .bell))
         .scaleEffect(e.scale)
         .animation(reduceMotion ? .easeInOut(duration: 0.25) : .spring(response: 0.45, dampingFraction: 0.55), value: mood)
+        // Morphs overshoot a little, so the new shape lands with a squash and a stretch.
+        .animation(reduceMotion ? .easeInOut(duration: 0.3) : .spring(response: 0.55, dampingFraction: 0.58), value: form)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: gaze)
         .animation(.spring(response: 0.5, dampingFraction: 0.72), value: near)
         .background(VisibilityProbe(hidden: $hidden))
         .onChange(of: mood) { _ in stir() }
+        .onChange(of: form) { _ in stir() }
         .task {
             guard blinks else { return }
             while !Task.isCancelled {
@@ -288,21 +302,21 @@ private struct CloudFace: View {
     /// middle. The core drifts against the gaze, so the cloud seems to turn toward the cursor.
     private func skin(_ e: Expression) -> some View {
         ZStack {
-            CloudShape().fill(LinearGradient(colors: Cloud.base, startPoint: .bottomLeading, endPoint: .topTrailing))
-            CloudShape().fill(RadialGradient(colors: [Cloud.sky.opacity(0.9), Cloud.sky.opacity(0)],
+            FormShape(form).fill(LinearGradient(colors: Cloud.base, startPoint: .bottomLeading, endPoint: .topTrailing))
+            FormShape(form).fill(RadialGradient(colors: [Cloud.sky.opacity(0.9), Cloud.sky.opacity(0)],
                                              center: UnitPoint(x: 0.12, y: 0.5), startRadius: 0, endRadius: size * 0.55))
-            CloudShape().fill(RadialGradient(colors: [Cloud.blush.opacity(0.85), Cloud.blush.opacity(0)],
+            FormShape(form).fill(RadialGradient(colors: [Cloud.blush.opacity(0.85), Cloud.blush.opacity(0)],
                                              center: UnitPoint(x: 0.85, y: 0.12), startRadius: 0, endRadius: size * 0.5))
-            CloudShape().fill(RadialGradient(
+            FormShape(form).fill(RadialGradient(
                 colors: [Color.white, Color.white.opacity(0.55), Color.white.opacity(0)],
                 center: UnitPoint(x: 0.44 - gaze.x * 0.08, y: 0.62 - gaze.y * 0.06),
                 startRadius: 0, endRadius: size * 0.36))
-            CloudShape().fill(e.tint).opacity(e.tintAmount)
+            FormShape(form).fill(e.tint).opacity(e.tintAmount)
             // A bright, soft rim.
-            CloudShape()
+            FormShape(form)
                 .stroke(Color.white.opacity(0.7), lineWidth: size * 0.05)
                 .blur(radius: size * 0.035)
-                .mask(CloudShape())
+                .mask(FormShape(form))
         }
         .compositingGroup()
     }
@@ -320,10 +334,10 @@ private struct CloudFace: View {
 
     private func face(_ e: Expression) -> some View {
         let k = tracks(e.eyes)
-        let w = size * (0.12 + 0.015 * near)
-        let h = size * (0.18 + 0.02 * near)
-        return VStack(spacing: size * 0.035) {
-            HStack(spacing: size * 0.07) {
+        let w = size * (0.12 + 0.015 * near) * form.eyes
+        let h = size * (0.18 + 0.02 * near) * form.eyes
+        return VStack(spacing: size * 0.035 * form.eyes) {
+            HStack(spacing: size * 0.07 * form.eyes) {
                 eye(e.eyes, left: true, width: w, height: h)
                 eye(e.eyes, left: false, width: w, height: h).offset(y: size * 0.01)
             }
@@ -332,7 +346,9 @@ private struct CloudFace: View {
         }
         // At rest it looks a little to the right, like the icon; the cursor pulls its face
         // anywhere inside the cloud.
-        .offset(x: size * (0.08 + gaze.x * 0.14 * k), y: size * (0.0 + gaze.y * 0.12 * k))
+        // Other forms move the face to where the shape has room for it.
+        .offset(x: size * (form.face.x + gaze.x * 0.14 * k * form.eyes),
+                y: size * (form.face.y + gaze.y * 0.12 * k * form.eyes))
     }
 
     @ViewBuilder private func eye(_ shape: EyeShape, left: Bool, width w: CGFloat, height h: CGFloat) -> some View {
@@ -430,6 +446,8 @@ private struct Wiggle: ViewModifier {
     var paused: Bool
     /// Reduce Motion: none of it.
     var still = false
+    /// The bell form swings from its top, ringing.
+    var ringing = false
 
     @ViewBuilder func body(content: Content) -> some View {
         if still {
@@ -450,6 +468,8 @@ private struct Wiggle: ViewModifier {
                 .scaleEffect(x: (1 + e.breathDepth * breath) * swell,
                              y: (1 - e.breathDepth * breath) * swell, anchor: .bottom)
                 .rotationEffect(.degrees(e.sway * sin(t * 0.9)))
+                .rotationEffect(.degrees(ringing ? 9 * sin(t * 2 * .pi * 1.8) * (0.55 + 0.45 * abs(sin(t * 0.7))) : 0),
+                                anchor: .top)
                 .offset(x: size * e.shake * CGFloat(sin(t * 57) * cos(t * 23)),
                         y: -size * e.hop * hop + size * e.shake * CGFloat(sin(t * 41)))
         }
@@ -463,12 +483,13 @@ private struct FluidRing: View {
     var e: Expression
     var gaze: CGPoint
     var paused: Bool
+    var form: CloudForm = .cloud
 
     var body: some View {
         let side = size * 2
         ZStack {
             // A soft halo (cheap: it doesn't move), then the liquid itself.
-            CloudShape().fill(e.glow)
+            FormShape(form).fill(e.glow)
                 .frame(width: size * 1.1, height: size * 1.1)
                 .blur(radius: size * 0.2)
                 .opacity(e.glowStrength)
@@ -486,6 +507,8 @@ private struct FluidRing: View {
         Canvas { ctx, sz in
             let c = CGPoint(x: sz.width / 2 + gaze.x * size * 0.05, y: sz.height / 2 + gaze.y * size * 0.04)
             let core = size * 0.43
+            // Thin forms hide only a small core; a full one would show through as a ball.
+            let heart = core * form.core
             ctx.addFilter(.alphaThreshold(min: 0.5, color: e.glow))
             ctx.addFilter(.blur(radius: max(1, size * 0.07)))
             ctx.drawLayer { l in
@@ -495,7 +518,7 @@ private struct FluidRing: View {
                 // A wobbling core just inside the cloud's edge.
                 for k in 0..<3 {
                     let a = t * (0.7 + Double(k) * 0.3) + Double(k) * 2.1
-                    blob(CGPoint(x: c.x + size * 0.035 * CGFloat(cos(a)), y: c.y + size * 0.035 * CGFloat(sin(a * 1.3))), core)
+                    blob(CGPoint(x: c.x + size * 0.035 * CGFloat(cos(a)), y: c.y + size * 0.035 * CGFloat(sin(a * 1.3))), heart)
                 }
                 for i in 0..<e.drops {
                     let phase = Double(i) / Double(max(1, e.drops))
